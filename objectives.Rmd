@@ -1,0 +1,271 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+1. platelet count before and after transfusions.
+
+1. Gauging the clinical relationship between Fibrinogen, FDP, and D-Dimer
+ 
+First of all we need to find out how many patients have at least two and preferably three of these measurements, otherwise it will be difficult to compare (barring some imputation method). Ideally, the measurements should be close together in time as well. We will look in to that.
+Ideally we need to find out more about the FDP and D-Dimer tests the MIMIC hospital ran, e.g. D-Dimer is a specific type of FDP so it would be interesting to see how those measurements compare, but we have to make sure they really are talking about total FDP. We can try to get more information on the assays.
+Overall, I'm a little wary of this idea for now, because as Maria pointed out in our initial look we only had ~90 patients with Fibrinogen measurements, let alone patients with Fibrinogen AND FDP. Perhaps we'll get more MIMIC patients though, because for now we were conservative on which of the 50,000 total hospital patients we counted as trauma, leaving us with only 3,000. One would think a higher percentage of a hospital visits are trauma in a major city like Boston.
+
+2. Stratify aPTT and PT measurements by platelet count
+As we all know, aPTT and PT is a measurement of clot strength of blood plasma alone, so we are only seeing part of the picture without looking at platelets.
+It would be interesting to compare bleeding outcomes based not only on aPTT and PT, but also platelet count. Perhaps aPTT and PT are only reliable indicators of coagulapathy when platelets are high?
+I really like this idea because aPTT/PT and blood panel (include platelet count) measurements are pretty standard for trauma patients in the MIMIC dataset, so we'll have a nice big sample size to work with there.
+
+3. How to get a good estimate of how much blood a patient lost?
+This is an idea I've also been talking about with Mitch. If patient received a lot of blood transfusions they probably lost a lot of blood, except in the case of young people. Young people often display normal vital signs despite losing massive amounts of blood, and for that reason often won't receive blood when they need it.
+I've been thinking about ways we can come up with a formula to estimate actual blood needed, based on blood received, blood acidity, lactate levels, and oxygenation. We can also look at MIMIC's doctor's notes to get more detailed injury information e.g. whether there was internal bleeding that was initially unidentified. Mitch says that in practice he determines whether to give blood transfusions based on the acidity of blood (as a result of anaerobic respiration from oxygen not being delivered, but also excess CO2). We certainly have various blood gas measurements, as well as lactate and HCO3, so I'd love to get Maria and Kathleen's point of view on that. Specifically, I'd like to know on what time scales those acidity would changes show up, and how much of a contribution lactate would make versus excess CO2. I can try to get more information on these things correlate.
+
+4. Comparing blood panels before and after transfusions
+One of the strengths of MIMIC is that we have information on exactly what time patients received a transfusion, how much, and for how long. Maria pointed out that it would be interesting to look at how these transfusions affect not only bleeding, but blood panels. For example, if a patient was in need of platelets and was subsequently given a platelet transfusion, presumably a good amount of those patients would go to the injury sites to help form clots, but some would also become a part of the circulating blood, and would thus result in higher platelet counts in blood panels. It would be interesting to quantitatively ascertain this relationship from the data.
+
+Still need
+* blood gasses
+* complete blood count
+* transfusions
+* filter only trauma patients
+* how do we judge injury severity?
+
+
+```{r}
+library(dplyr)
+library(stringr)
+
+#get names of relevant lab events
+psql_con <- src_postgres(dbname = "mimic", user = "arya", host = "localhost", password = "shark123")
+admissions <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.admissions'))
+patients <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.patients'))
+d_labitems <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.d_labitems'))
+
+notes <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.noteevents'))
+
+
+```
+
+
+filter for only trauma patients
+
+```{r}
+admissions_local <- admissions %>%
+  filter(admission_type != "NEWBORN") %>%
+  left_join(patients, by = "subject_id") %>%
+  collect %>%
+  mutate(age = (dob %--% admittime) %/% years(1),
+         days_in_hosp = (admittime %--% dischtime) %/% days(1),
+         days_until_death =  (admittime %--% deathtime) %/% days(1)) %>%
+  select(subject_id, hadm_id, ethnicity, gender, age, admittime, admission_type, diagnosis, admission_location, days_in_hosp, days_until_death)
+
+#white_list <- "S/P MOTOR VEHICLE ACCIDENT|BLUNT TRAUMA|S/P FALL|STATUS POST MOTOR VEHICLE ACCIDENT WITH INJURIES|TRAUMA|GUN SHOT WOUND|LIVER LACERATION|HEAD INJURY|TRAUMA|STABBING|MOTOR|TRAUMA|HEAD BLEED|STAB WOUND|POLYTRAUMA|STRUCK"
+
+mva_list <- "MOTOR|MVA"
+
+mva <- admissions_local %>%
+  filter(str_detect(diagnosis, pattern = mva_list)) %>%
+  filter(age <= 44)
+
+black_list <- "OVERDOSE|INFARCTION|PNEUMONIA|PANCREATITIS|CORONARY ARTERY DISEASE|ANGINA|ACUTE CORONARY SYNDROME|CONGESTIVE HEART FAILURE|HEMOPTYSIS|LARGE BOWEL OBSTRUCTION|ENDOCARDITIS|UPPER GI BLEED|ALTERED MENTAL STATUS|KIDNEY STONES|SEPSIS|CHEST PAIN|FEVER|DIABETIC KETOACIDOSIS|SEIZURE|STROKE|HYPOTENSION|ACUTE RENAL FAILURE|LIVER FAILURE|CANCER|GANGRENE|ASTHMA|TUMOR|ABDOMINAL PAIN|HYPERBILIRUBINEMIA|PREMATURITY|GASTROINTESTINAL BLEED|WITHDRAWAL|BRAIN MASS|RESPIRATORY FAILURE|SUBARACHNOID HEMORRHAGE|RESPIRATORY DISTRESS|CARDIAC ARREST|TYLENOL OD|RENAL FAILURE|ALCOHOL INTOXICATION|CIRRHOSIS|LEUKEMIA|TOXICITY|TACHYCARDIA|POLY SUBSTANCE OD|CARDIOMYOPATHY|HEADACHE|SCHLEROSING CHOLANGITIS|EPILEPSY|ANEURYSM|INFECTION|HYPERTENSIVE URGENCY|CELLULITIS|MORBID OBESITY/SDA|DYSPNEA|HYPERTENSION|SHORTNESS OF BREATH|PERICARDIAL EFFUSION|ETOH INTOXICATION|WEAKNESS|ANEMIA|GI BLEED|SMALL BOWEL OBSTRUCTION|CHIARI MALFORMATION|PULMONARY EMBOLIS|AORTIC DISSECTION|HYDROCEPHALUS|HYPERGLYCEMIA|MENINGITIS|RENAL DISEASE|HYPOXIA|ALLERG|LYMPHOMA|CHOLANGITIS|COLITIS|GASTROPARESIS|PREGNAN|HYPERKALEMIA|STATUS EPILEPTICUS|HYPERTENSIVE EMERGENCY|HYPOTHERMIA|PYELONEPHRITIS|TRACHEAL STENOSIS|VARICEAL BLEED|ANAPHYLAXIS|BACTEREMIA|END STAGE LIVER DISEASE|INTOXICATION|NEAR DROWNING|POLYSUBSTANCE OD|PULMONARY EMBOLUS|SCOLIOSIS|ALCOHOL|AORTIC STENOSIS|BOWEL OBSTRUCTION|CHANGE IN MENTAL STATUS|AIRWAY OBSTRUCTION|DIABETES|WITHDRAWL|THYROID|THYROID|HYPERTENSIVE|HEART BLOCK|AORTIC INSUFFICIENCY|NEWBORN|SEPTIC SHOCK|WEIGHT LOSS|HEPATIC|SUBDURAL HEMATOMA|AORTIC|ARREST|ATRIAL|PULMONARY EDEMA|ISCHEMIC|DEHISENCE|HYPONATREMIA|CHRON'S DISEASE"
+
+
+trauma_admissions <- admissions_local %>%
+  filter(!str_detect(diagnosis, pattern = black_list)) %>%
+  filter(age <= 44) %>%
+  group_by(diagnosis) %>%
+  #filter(n() > 1) %>%
+  ungroup()
+
+
+  
+nrow(trauma_admissions)  
+
+trauma_admissions %>% group_by(diagnosis) %>% summarize(n = n()) %>% arrange(desc(n))
+t <- trauma_admissions %>% filter(diagnosis == "HYPOXIA") %>% sample_n(1) %>% pull(subject_id); notes %>% filter(category == "Discharge summary") %>% filter(subject_id == t) %>% pull(text) %>% cat
+
+```
+
+
+# Transfers
+
+```{r}
+transfers <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.transfers'))
+callout <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.callout'))
+datetimeevents <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.datetimeevents'))
+cptevents <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.cptevents'))
+services <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.services'))
+diagnoses_icd <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.diagnoses_icd'))
+d_icd_procedures <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.d_icd_procedures'))
+
+
+procedureevents_mv <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.procedureevents_mv'))
+```
+
+# Lab Events
+
+```{r}
+library(lubridate)
+
+d_labitems_local <- d_labitems %>% collect
+
+dimer <- d_labitems_local %>% filter(str_detect(label,"Dimer")) %>% .$itemid
+fib <- d_labitems_local %>% filter(str_detect(label,"Fib")) %>% .$itemid
+plat <- d_labitems_local %>% filter(str_detect(label,"Plat")) %>% .$itemid
+pt <- d_labitems_local %>% filter(str_detect(label,"PT")) %>% .$itemid
+
+coag_meas_id <- c(dimer, fib, plat, pt) %>% unique
+
+admit_times <- admissions %>% select(subject_id, hadm_id, admittime)
+lab_events <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.labevents'))
+
+#get summaries of how much of each we have
+coag_labevents <- lab_events %>%
+  filter(itemid %in% coag_meas_id) %>%
+  inner_join(admit_times) %>%
+  collect(n = Inf) %>%
+  left_join(d_labitems_local, by = "itemid") %>%
+  #inner_join(admit_times) %>%
+  select(-row_id.x, -row_id.y, -category, -loinc_code)# %>%
+  #collect(n = Inf)
+
+coag_labevents_first24 <- coag_labevents %>%
+  filter(!is.na(hadm_id)) %>%
+  mutate(reltime_hours = (admittime %--% charttime)/dhours()) %>%
+  filter(reltime_hours <= 24.0) %>%
+  select(-itemid, -admittime) %>%
+  mutate(label = as.factor(label))
+
+minN <- function(x, N=1){
+  len <- length(x)
+  if(N>len){
+    return(as.double(NA))
+    N <- length(x)
+  }
+  return(sort(x)[N])
+}
+```
+
+```{r}
+coag_labevents_first24_grouped <- coag_labevents_first24 %>%
+  arrange(subject_id, hadm_id, label, reltime_hours) %>%
+  group_by(subject_id, hadm_id, label) %>%
+  mutate(time_between_meas = c(0, diff(reltime_hours)))
+  
+coag_labevents_first24_summary <- coag_labevents_first24_grouped %>%
+  summarize(num_meas = n(),
+            obs_time1 = minN(reltime_hours, 1),
+            obs_time2 = minN(reltime_hours, 2),
+            obs_time3 = minN(reltime_hours, 3),
+            obs_time4 = minN(reltime_hours, 4),
+            obs_time5 = minN(reltime_hours, 5))
+```
+
+```{r}
+coag_labevents_first24_summary %>% filter(label == "D-Dimer") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "Fibrin Degradation Products") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "INR(PT)") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "PT") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "PTT") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "Large Platelets") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "Platelet Clumps") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "Platelet Count") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+coag_labevents_first24_summary %>% filter(label == "Platelet Smear") %>% ggplot(aes(num_meas)) + geom_bar() + xlim(0,10)
+```
+
+# Blood Gas
+
+```{r}
+rbc <- 51279
+wbc <- 51300
+d_labitems_local %>% filter(category == "Blood Gas")
+base_exc <- 50802
+total_co2 <- 50804
+bicarb <- 50803
+hematocrit <- 50810
+hemaglobin <- 50811
+lactate <- 50813
+o2_flow <- 50815
+o2 <- 50816
+o2_saturation <- 50817
+pco2 <- 50818
+ph <- 50820
+po2 <- 50821
+temp <- 50825
+tital_volume <- 50826
+vent_rate <- 50827
+
+blood_gas_ids <- c(rbc, wbc, base_exc, total_co2, bicarb,
+                   hematocrit, hemaglobin, lactate, o2_flow,
+                   o2, o2_saturation, pco2, ph, po2, temp,
+                   tital_volume, vent_rate)
+```
+
+```{r}
+blood_gas_events <- lab_events %>%
+  semi_join(mva_db) %>%
+  filter(itemid %in% blood_gas_ids) %>%
+  collect(n = Inf) %>%
+  left_join(d_labitems_local, by = "itemid") %>%
+  select(-row_id.x, -row_id.y, -category, -loinc_code)
+```
+
+
+# Transfusions
+
+```{r}
+inputevents <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.inputevents_mv'))
+
+#copy temp MVA back in to database so we can inner_join with it
+copy_to(psql_con, mva, "mva", temporary = TRUE, indexes = list("subject_id", "hadm_id"))
+mva_db <- tbl(psql_con, "mva")
+
+mva_inputevents_local <- inputevents %>%
+  semi_join(mva_db) %>%
+  select(subject_id, hadm_id, icustay_id, starttime, endtime, itemid, amount, amountuom, ordercategoryname) %>%
+  collect %>%
+  left_join(select(d_items_local, itemid, label))
+
+# collect only patients that have metavision inputs for now  
+mva_mv <- mva %>% semi_join(mva_inputevents_local)
+```
+
+
+# Chart Data
+
+```{r}
+chartevents <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.chartevents'))
+d_items <- tbl(psql_con, dplyr::sql('SELECT * FROM mimiciii.d_items'))
+d_items_local <- d_items %>% collect
+
+
+sys_item_ids <- d_items_local %>% filter(str_detect(label, pattern = "systolic")) %>% pull(itemid)
+dya_item_ids <- d_items_local %>% filter(str_detect(label, pattern = "diastolic")) %>% pull(itemid)
+bp_item_ids <- d_items_local %>% filter(str_detect(label, pattern = "bp")) %>% pull(itemid)
+
+bpevents_local <- chartevents %>% filter(itemid %in% c(sys_item_ids, dya_item_ids, bp_item_ids)) %>% inner_join(admissions, by = c("subject_id", "hadm_id")) %>% collect(n = Inf)
+
+chartevent_counts <- chartevents %>% group_by(itemid) %>% summarize(n = n()) %>% arrange(desc(n)) %>% inner_join(d_items)
+```
+
+# Waveforms
+
+```{r}
+# get metadata about waveform including the data the waveform started recording
+waveform_meta <- tibble(file_str = readLines("RECORDS-numerics.txt")) %>%
+  mutate(str = str_replace(file_str, pattern = "s", replacement = "")) %>%
+  separate(str, c("subject_id", "str"), sep = "/") %>%
+  mutate(subject_id = as.integer(subject_id)) %>%
+  mutate(str = str_replace(str, pattern = "s[0-9]+-", replacement = "")) %>%
+  mutate(str = str_replace(str, pattern = "n", replacement = "")) %>%
+  mutate(waveform_starttime = ymd_hm(str)) %>% select(-str)
+
+#find trauma patients who have waveforms
+trauma_admissions_waveforms <- trauma_admissions %>% inner_join(waveform_meta)# %>% mutate(waveforms = map(file_str, get_patient_numerics))
+tibble(patient_str) %>% filter(str_detect(patient_str, pattern = "s26037"))
+get_patient_numerics("s26037/s26037-2194-09-13-23-20n")
+
+#
+trauma_admissions_waveforms %>% mutate(hours_to_waveform_recording = (admittime %--% waveform_starttime) %/% hours(1)) %>% select(-admittime, -waveform_starttime) %>% filter(hours_to_waveform_recording < 1)
+```
+
