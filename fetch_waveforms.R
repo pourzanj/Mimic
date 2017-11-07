@@ -2,8 +2,8 @@ library(tidyverse)
 library(stringr)
 
 # function that takes file_str representing patient, queries waveform database and returns dataframe for that patient
-get_patient_numerics <- function(file_str) {
-  raw_table <- system(paste0("rdsamp -r mimic3wdb/matched/", file_str," -v -p -c"), intern = TRUE) %>%
+get_patient_numerics <- function(file_str, seconds) {
+  raw_table <- system(paste0("rdsamp -r mimic3wdb/matched/", file_str," -v -p -c -t ", seconds), intern = TRUE) %>%
     str_replace_all("-", "")
   
   units_strs <- str_split(raw_table[2], ",") %>% unlist %>% str_replace_all("'", "") %>% paste(sep = "(")
@@ -15,14 +15,19 @@ get_patient_numerics <- function(file_str) {
 
 #RECORDS-numerics contains all the matched MIMIC III patients
 #matched just means that they are in MIMIC III
-waveform_meta <- tibble(patient_str = readLines("RECORDS-numerics"))
+#numerics contains vital signs
+numerics_meta <- tibble(patient_str = readLines("RECORDS-numerics"))
+waveform_meta <- tibble(patient_str = readLines("RECORDS-waveforms"))
 
 #draw a random patient and plot their waveform
-s <- sample_n(waveform_meta, size = 1) %>% pull(patient_str) ;print(s)
-get_patient_numerics(s) %>%
+s <- sample_n(numerics_meta, size = 1) %>% pull(patient_str) ;print(s)
+get_patient_numerics(s,10) %>%
   select(Elapsed_time_seconds_,contains("mean"), contains("hr"), contains("resp")) %>%
   gather(vital, value,-Elapsed_time_seconds_) %>%
   ggplot(aes(Elapsed_time_seconds_, value, group = vital, color = vital)) + geom_line() + geom_point()
+
+s <- sample_n(waveform_meta, size = 1) %>% pull(patient_str) ;print(s)
+get_patient_numerics(s,10)
 
 # system.time(l0 <- mclapply(patient_str[1:1000], get_patient_numerics, mc.cores = 4))
 # system.time(l1000 <- mclapply(patient_str[1001:2000], get_patient_numerics, mc.cores = 4))
