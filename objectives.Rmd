@@ -55,9 +55,9 @@ admissions_local <- admissions %>%
   left_join(patients, by = "subject_id") %>%
   collect %>%
   mutate(age = (dob %--% admittime) %/% years(1),
-         days_in_hosp = (admittime %--% dischtime) %/% days(1),
-         days_until_death =  (admittime %--% deathtime) %/% days(1)) %>%
-  select(subject_id, hadm_id, ethnicity, gender, age, admittime, admission_type, diagnosis, admission_location, days_in_hosp, days_until_death)
+         days_in_hosp = (admittime %--% dischtime) %/% days(1)) %>%
+  #mutate(days_until_death =  ifelse(is.na(deathtime),NA,(admittime %--% deathtime) %/% days(1))) %>%
+  select(subject_id, hadm_id, ethnicity, gender, age, admittime, admission_type, diagnosis, admission_location, days_in_hosp)
 
 #white_list <- "S/P MOTOR VEHICLE ACCIDENT|BLUNT TRAUMA|S/P FALL|STATUS POST MOTOR VEHICLE ACCIDENT WITH INJURIES|TRAUMA|GUN SHOT WOUND|LIVER LACERATION|HEAD INJURY|TRAUMA|STABBING|MOTOR|TRAUMA|HEAD BLEED|STAB WOUND|POLYTRAUMA|STRUCK"
 
@@ -77,8 +77,6 @@ trauma_admissions <- admissions_local %>%
   #filter(n() > 1) %>%
   ungroup()
 
-
-  
 nrow(trauma_admissions)  
 
 trauma_admissions %>% group_by(diagnosis) %>% summarize(n = n()) %>% arrange(desc(n))
