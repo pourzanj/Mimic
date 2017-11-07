@@ -1,3 +1,6 @@
+library(tidyverse)
+library(stringr)
+
 # function that takes file_str representing patient, queries waveform database and returns dataframe for that patient
 get_patient_numerics <- function(file_str) {
   raw_table <- system(paste0("rdsamp -r mimic3wdb/matched/", file_str," -v -p -c"), intern = TRUE) %>%
